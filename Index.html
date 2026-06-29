@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%B8%3C/text%3E%3C/svg%3E">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%236366f1'/%3E%3Ctext x='50' y='68' font-size='58' text-anchor='middle'%3E%F0%9F%92%B8%3C/text%3E%3C/svg%3E">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+
+  <header class="appbar">
+    <span class="appbar-title">💸 Expenses</span>
+  </header>
+
+  <main class="content">
+
+    <!-- ===================== TODAY SCREEN ===================== -->
+    <section id="screen-today" class="screen">
+      <div class="day-head">
+        <div class="day-head-label" id="todayLabel">Today</div>
+        <div class="day-head-date" id="todayDate">—</div>
+      </div>
+
+      <div class="total-card">
+        <div class="total-label">Spent today</div>
+        <div class="total-amt" id="todayTotal">₹0</div>
+        <div class="total-sub" id="todayCount"></div>
+      </div>
+
+      <ul id="todayList" class="exp-list"></ul>
+    </section>
+
+    <!-- ===================== HISTORY SCREEN ===================== -->
+    <section id="screen-history" class="screen hidden">
+      <div class="month-nav">
+        <button id="prevMonth" class="month-arrow" aria-label="Previous month">‹</button>
+        <div class="month-label" id="monthLabel">—</div>
+        <button id="nextMonth" class="month-arrow" aria-label="Next month">›</button>
+      </div>
+
+      <div class="month-summary">
+        <span>Total this month</span>
+        <span class="month-total" id="monthTotal">₹0</span>
+      </div>
+
+      <div id="historyGroups" class="history-groups"></div>
+    </section>
+
+    <!-- ===================== REPORT SCREEN ===================== -->
+    <section id="screen-report" class="screen hidden">
+      <div class="toggle" id="periodToggle">
+        <button data-period="month" class="active">Month</button>
+        <button data-period="year">Year</button>
+      </div>
+
+      <div class="period-pickers">
+        <input type="month" id="monthPicker" class="field">
+        <select id="yearPicker" class="field hidden"></select>
+      </div>
+
+      <div class="total-card">
+        <div class="total-label">Total spent</div>
+        <div class="total-amt" id="reportTotal">₹0</div>
+        <div class="total-sub" id="reportCount"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">By category</div>
+        <div class="chart-wrap"><canvas id="pieChart"></canvas></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">Trend</div>
+        <div class="chart-wrap"><canvas id="barChart"></canvas></div>
+      </div>
+
+      <div class="block">
+        <div class="block-label">Top categories</div>
+        <div id="topCats" class="topcats"></div>
+      </div>
+    </section>
+
+    <!-- ===================== CATEGORIES SCREEN ===================== -->
+    <section id="screen-cats" class="screen hidden">
+      <div class="block">
+        <div class="block-label">Add category</div>
+        <div class="add-cat">
+          <input type="text" id="newCatInput" class="field full" placeholder="e.g. Coffee, Rent">
+          <button id="addCatBtn" class="add-btn">Add</button>
+        </div>
+      </div>
+      <div class="block">
+        <div class="block-label">Your categories</div>
+        <ul id="catManageList" class="cat-list"></ul>
+      </div>
+      <p class="hint">Deleting a category hides it from new entries. Past expenses keep their category.</p>
+    </section>
+
+  </main>
+
+  <!-- sticky Add Expense button (Today + History) -->
+  <button id="openAddBtn" class="add-expense">+ Add Expense</button>
+
+  <!-- bottom navigation -->
+  <nav class="bottom-nav">
+    <button data-nav="today" class="active"><span class="nav-ico">🏠</span><span>Today</span></button>
+    <button data-nav="history"><span class="nav-ico">📅</span><span>History</span></button>
+    <button data-nav="report"><span class="nav-ico">📊</span><span>Report</span></button>
+    <button data-nav="cats"><span class="nav-ico">🏷️</span><span>Categories</span></button>
+  </nav>
+
+  <!-- ===================== ADD EXPENSE SHEET ===================== -->
+  <div id="sheetBackdrop" class="sheet-backdrop hidden"></div>
+  <div id="addSheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Add expense">
+    <div class="sheet-grip"></div>
+    <div class="sheet-head">
+      <span class="sheet-title">Add Expense</span>
+      <button id="closeSheetBtn" class="sheet-close" aria-label="Close">✕</button>
+    </div>
+
+    <div class="sheet-body">
+      <label class="amount-field">
+        <span class="amount-cur">₹</span>
+        <input id="amountInput" type="text" inputmode="decimal" pattern="[0-9]*"
+               placeholder="0" autocomplete="off">
+      </label>
+
+      <div class="block">
+        <div class="block-label">Category</div>
+        <div class="chips scroll-x" id="categoryChips"></div>
+      </div>
+
+      <div class="block two-col">
+        <div>
+          <div class="block-label">Pay</div>
+          <div class="pills" id="paymentPills"></div>
+        </div>
+        <div>
+          <div class="block-label">Date</div>
+          <input type="date" id="dateInput" class="field">
+        </div>
+      </div>
+
+      <input type="text" id="noteInput" class="field full" placeholder="Note (optional)">
+
+      <button id="saveBtn" class="save-btn">Save Expense</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="loading" class="loading">Loading…</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <?!= include('JavaScript'); ?>
+</body>
+</html>

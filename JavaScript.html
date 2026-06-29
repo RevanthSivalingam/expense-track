@@ -1,0 +1,408 @@
+<script>
+(function () {
+  'use strict';
+
+  /* ============ google.script.run → Promise ============ */
+  function call(fn, arg) {
+    return new Promise(function (res, rej) {
+      var runner = google.script.run.withSuccessHandler(res).withFailureHandler(rej);
+      if (arg === undefined) runner[fn](); else runner[fn](arg);
+    });
+  }
+  var api = {
+    bootstrap:      function ()  { return call('getBootstrap'); },
+    addExpense:     function (a) { return call('addExpense', a); },
+    getExpenses:    function (a) { return call('getExpenses', a); },
+    deleteExpense:  function (a) { return call('deleteExpense', a); },
+    addCategory:    function (a) { return call('addCategory', a); },
+    deleteCategory: function (a) { return call('deleteCategory', a); },
+    getReport:      function (a) { return call('getReport', a); }
+  };
+
+  /* ============ state ============ */
+  var state = {
+    categories: [], selectedCategory: null,
+    paymentMethods: ['Cash', 'UPI', 'Card'], selectedPayment: 'UPI',
+    locale: 'en-IN',
+    todayISO: '', monthValue: '', yearValue: '',
+    reportPeriod: 'month',
+    historyMonth: '',         // 'YYYY-MM'
+    activeView: 'today'
+  };
+  var pieChart = null, barChart = null;
+  var PALETTE = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#84cc16'];
+  var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  var WK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  /* ============ helpers ============ */
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+  function fmt(n) {
+    try { return new Intl.NumberFormat(state.locale, { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n); }
+    catch (e) { return '₹' + Number(n).toFixed(2); }
+  }
+  function todayISOLocal() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function isDark() { return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches; }
+  function tickColor() { return isDark() ? '#cbd5e1' : '#475569'; }
+  function gridColor() { return isDark() ? 'rgba(148,163,184,.15)' : 'rgba(100,116,139,.15)'; }
+
+  // 'YYYY-MM-DD' -> Date (local midnight)
+  function isoToLocalDate(iso) { var p = iso.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
+  function relativeDayLabel(iso) {
+    if (iso === state.todayISO) return 'Today';
+    var d = isoToLocalDate(iso);
+    var y = new Date(); y.setDate(y.getDate() - 1);
+    var yISO = y.getFullYear() + '-' + String(y.getMonth() + 1).padStart(2, '0') + '-' + String(y.getDate()).padStart(2, '0');
+    if (iso === yISO) return 'Yesterday';
+    return WK[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS[d.getMonth()].substring(0, 3);
+  }
+  function fullDateLabel(iso) {
+    var d = isoToLocalDate(iso);
+    return WK[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS[d.getMonth()].substring(0, 3) + ' ' + d.getFullYear();
+  }
+
+  var toastTimer;
+  function toast(msg) {
+    var t = $('toast'); t.textContent = msg; t.classList.remove('hidden');
+    requestAnimationFrame(function () { t.classList.add('show'); });
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      t.classList.remove('show');
+      setTimeout(function () { t.classList.add('hidden'); }, 250);
+    }, 1800);
+  }
+
+  /* ============ a reusable expense <li> ============ */
+  function expenseItem(e) {
+    var li = el('li', 'recent-item');
+    var left = el('div', 'ri-left');
+    left.appendChild(el('span', 'ri-cat', e.category));
+    var meta = e.paymentMethod + (e.note ? (' · ' + e.note) : '');
+    left.appendChild(el('span', 'ri-meta', meta));
+    var right = el('div', 'ri-right');
+    right.appendChild(el('span', 'ri-amt', fmt(e.amount)));
+    var del = el('button', 'ri-del', '✕');
+    del.addEventListener('click', function () { if (confirm('Delete this expense?')) doDelete(e.id); });
+    right.appendChild(del);
+    li.appendChild(left); li.appendChild(right);
+    return li;
+  }
+  function emptyBox(emoji, msg) {
+    var d = el('div', 'empty');
+    d.appendChild(el('span', 'empty-emoji', emoji));
+    d.appendChild(el('div', null, msg));
+    return d;
+  }
+
+  /* ============ navigation ============ */
+  function nav(view) {
+    state.activeView = view;
+    ['today', 'history', 'report', 'cats'].forEach(function (v) {
+      var s = $('screen-' + v); if (s) s.classList.toggle('hidden', v !== view);
+    });
+    document.querySelectorAll('.bottom-nav button').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.nav === view);
+    });
+    // Add button only makes sense on Today / History
+    $('openAddBtn').classList.toggle('hidden', !(view === 'today' || view === 'history'));
+    if (view === 'today') renderToday();
+    if (view === 'history') renderHistory();
+    if (view === 'report') loadReport();
+    if (view === 'cats') renderCatManage();
+  }
+
+  /* ============ Today ============ */
+  function refreshTodayDate() {
+    state.todayISO = todayISOLocal();
+    $('todayDate').textContent = fullDateLabel(state.todayISO);
+  }
+  function renderToday() {
+    refreshTodayDate();
+    api.getExpenses({ period: 'day', value: state.todayISO }).then(function (r) {
+      $('todayTotal').textContent = fmt(r.total);
+      $('todayCount').textContent = r.expenses.length + ' expense' + (r.expenses.length === 1 ? '' : 's');
+      var ul = $('todayList'); ul.innerHTML = '';
+      if (!r.expenses.length) { ul.appendChild(emptyBox('🧾', 'No expenses today — tap “+ Add Expense”.')); return; }
+      r.expenses.forEach(function (e) { ul.appendChild(expenseItem(e)); });
+    });
+  }
+
+  /* ============ History ============ */
+  function updateMonthLabel() {
+    var p = state.historyMonth.split('-');
+    $('monthLabel').textContent = MONTHS[+p[1] - 1] + ' ' + p[0];
+    // don't allow navigating into the future beyond current month
+    $('nextMonth').disabled = (state.historyMonth >= state.monthValue);
+  }
+  function shiftMonth(delta) {
+    var p = state.historyMonth.split('-');
+    var d = new Date(+p[0], +p[1] - 1 + delta, 1);
+    var nv = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    if (nv > state.monthValue) return; // no future
+    state.historyMonth = nv;
+    renderHistory();
+  }
+  function renderHistory() {
+    updateMonthLabel();
+    api.getExpenses({ period: 'month', value: state.historyMonth }).then(function (r) {
+      $('monthTotal').textContent = fmt(r.total);
+      var box = $('historyGroups'); box.innerHTML = '';
+      if (!r.expenses.length) { box.appendChild(emptyBox('📅', 'No expenses in this month.')); return; }
+
+      // group by dateISO (already newest-first from server)
+      var order = [], groups = {};
+      r.expenses.forEach(function (e) {
+        if (!groups[e.dateISO]) { groups[e.dateISO] = { total: 0, items: [] }; order.push(e.dateISO); }
+        groups[e.dateISO].total += e.amount;
+        groups[e.dateISO].items.push(e);
+      });
+
+      order.forEach(function (iso) {
+        var g = groups[iso];
+        var wrap = el('div', 'day-group');
+        var head = el('div', 'day-group-head');
+        head.appendChild(el('span', 'dg-label', relativeDayLabel(iso)));
+        head.appendChild(el('span', 'dg-total', fmt(g.total)));
+        wrap.appendChild(head);
+        var ul = el('ul', 'exp-list'); ul.style.marginTop = '0';
+        g.items.forEach(function (e) { ul.appendChild(expenseItem(e)); });
+        wrap.appendChild(ul);
+        box.appendChild(wrap);
+      });
+    });
+  }
+
+  function doDelete(id) {
+    api.deleteExpense({ id: id }).then(function (r) {
+      if (r && r.ok) {
+        toast('Deleted');
+        if (state.activeView === 'today') renderToday();
+        else if (state.activeView === 'history') renderHistory();
+      } else { toast('Could not delete'); }
+    });
+  }
+
+  /* ============ Add Expense sheet ============ */
+  function renderChips() {
+    var c = $('categoryChips'); c.innerHTML = '';
+    if (!state.categories.length) { c.appendChild(el('span', 'muted', 'No categories — add one in the Categories tab')); return; }
+    state.categories.forEach(function (cat) {
+      var b = el('button', 'chip' + (cat.name === state.selectedCategory ? ' sel' : ''), cat.name);
+      b.addEventListener('click', function () { state.selectedCategory = cat.name; renderChips(); });
+      c.appendChild(b);
+    });
+  }
+  function renderPayments() {
+    var p = $('paymentPills'); p.innerHTML = '';
+    state.paymentMethods.forEach(function (m) {
+      var b = el('button', 'pill' + (m === state.selectedPayment ? ' sel' : ''), m);
+      b.addEventListener('click', function () { state.selectedPayment = m; renderPayments(); });
+      p.appendChild(b);
+    });
+  }
+  function openSheet() {
+    refreshTodayDate();
+    $('amountInput').value = '';
+    $('noteInput').value = '';
+    $('dateInput').value = state.todayISO;
+    if (!state.selectedCategory && state.categories[0]) state.selectedCategory = state.categories[0].name;
+    renderChips(); renderPayments();
+    $('sheetBackdrop').classList.remove('hidden');
+    $('addSheet').classList.remove('hidden');
+    requestAnimationFrame(function () {
+      $('sheetBackdrop').classList.add('show');
+      $('addSheet').classList.add('show');
+      setTimeout(function () { $('amountInput').focus(); }, 220);
+    });
+  }
+  function closeSheet() {
+    $('sheetBackdrop').classList.remove('show');
+    $('addSheet').classList.remove('show');
+    setTimeout(function () {
+      $('sheetBackdrop').classList.add('hidden');
+      $('addSheet').classList.add('hidden');
+    }, 260);
+  }
+  function save() {
+    var amt = parseFloat($('amountInput').value);
+    if (!(amt > 0)) { toast('Enter an amount'); $('amountInput').focus(); return; }
+    if (!state.selectedCategory) { toast('Pick a category'); return; }
+
+    var payload = {
+      amount: amt,
+      category: state.selectedCategory,
+      dateISO: $('dateInput').value,
+      note: $('noteInput').value,
+      paymentMethod: state.selectedPayment
+    };
+    var btn = $('saveBtn'); btn.disabled = true; btn.textContent = 'Saving…';
+    api.addExpense(payload).then(function (r) {
+      btn.disabled = false; btn.textContent = 'Save Expense';
+      if (r && r.ok) {
+        toast('Saved ' + fmt(amt));
+        closeSheet();
+        if (state.activeView === 'today') renderToday();
+        else if (state.activeView === 'history') renderHistory();
+      } else { toast((r && r.error) || 'Failed to save'); }
+    }).catch(function (e) {
+      btn.disabled = false; btn.textContent = 'Save Expense';
+      toast('Error: ' + e.message);
+    });
+  }
+
+  /* ============ Report ============ */
+  function loadReport() {
+    var period = state.reportPeriod;
+    var value = period === 'month' ? $('monthPicker').value : $('yearPicker').value;
+    api.getReport({ period: period, value: value }).then(renderReport).catch(function (e) { toast('Report error: ' + e.message); });
+  }
+  function renderReport(r) {
+    $('reportTotal').textContent = fmt(r.total);
+    $('reportCount').textContent = r.count + ' expense' + (r.count === 1 ? '' : 's');
+    drawPie(r.byCategory);
+    drawBar(r.trend);
+    var tc = $('topCats'); tc.innerHTML = '';
+    if (!r.byCategory.length) { tc.appendChild(el('div', 'muted', 'No data for this period')); return; }
+    r.byCategory.slice(0, 5).forEach(function (c) {
+      var row = el('div', 'topcat-row');
+      row.appendChild(el('span', 'tc-name', c.category));
+      row.appendChild(el('span', 'tc-amt', fmt(c.amount)));
+      tc.appendChild(row);
+    });
+  }
+  function drawPie(byCat) {
+    var ctx = $('pieChart').getContext('2d');
+    var labels = byCat.map(function (c) { return c.category; });
+    var data = byCat.map(function (c) { return c.amount; });
+    if (pieChart) { pieChart.data.labels = labels; pieChart.data.datasets[0].data = data; pieChart.options.plugins.legend.labels.color = tickColor(); pieChart.update(); return; }
+    pieChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: { labels: labels, datasets: [{ data: data, backgroundColor: PALETTE, borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, cutout: '58%',
+        plugins: { legend: { position: 'bottom', labels: { color: tickColor(), boxWidth: 12, padding: 12 } } } }
+    });
+  }
+  function drawBar(trend) {
+    var ctx = $('barChart').getContext('2d');
+    var labels = trend.map(function (t) { return t.label; });
+    var data = trend.map(function (t) { return t.amount; });
+    if (barChart) {
+      barChart.data.labels = labels; barChart.data.datasets[0].data = data;
+      barChart.options.scales.x.ticks.color = tickColor();
+      barChart.options.scales.y.ticks.color = tickColor();
+      barChart.options.scales.y.grid.color = gridColor();
+      barChart.update(); return;
+    }
+    barChart = new Chart(ctx, {
+      type: 'bar',
+      data: { labels: labels, datasets: [{ data: data, backgroundColor: '#6366f1', borderRadius: 6 }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: tickColor() }, grid: { display: false } },
+          y: { ticks: { color: tickColor() }, grid: { color: gridColor() }, beginAtZero: true }
+        } }
+    });
+  }
+
+  /* ============ Categories management ============ */
+  function renderCatManage() {
+    var ul = $('catManageList'); ul.innerHTML = '';
+    if (!state.categories.length) { ul.appendChild(el('li', 'muted', 'No categories yet')); return; }
+    state.categories.forEach(function (c) {
+      var li = el('li', 'cat-row');
+      li.appendChild(el('span', null, c.name));
+      var del = el('button', 'cat-del', 'Delete');
+      del.addEventListener('click', function () {
+        if (confirm('Delete category "' + c.name + '"? Past expenses keep it.')) {
+          api.deleteCategory({ name: c.name }).then(afterCatChange);
+        }
+      });
+      li.appendChild(del);
+      ul.appendChild(li);
+    });
+  }
+  function afterCatChange(r) {
+    if (r && r.ok) {
+      state.categories = r.categories;
+      if (!state.selectedCategory || !state.categories.some(function (c) { return c.name === state.selectedCategory; })) {
+        state.selectedCategory = state.categories[0] ? state.categories[0].name : null;
+      }
+      renderChips(); renderCatManage(); toast('Updated');
+    } else {
+      toast(r && r.error === 'duplicate' ? 'Already exists' : 'Failed');
+    }
+  }
+
+  /* ============ pickers ============ */
+  function buildYearPicker() {
+    var sel = $('yearPicker'); var y = parseInt(state.yearValue, 10); sel.innerHTML = '';
+    for (var i = y; i >= y - 5; i--) { var o = el('option', null, String(i)); o.value = String(i); sel.appendChild(o); }
+    sel.value = state.yearValue;
+  }
+
+  /* ============ init ============ */
+  function init() {
+    document.querySelectorAll('.bottom-nav button').forEach(function (b) {
+      b.addEventListener('click', function () { nav(b.dataset.nav); });
+    });
+    $('openAddBtn').addEventListener('click', openSheet);
+    $('closeSheetBtn').addEventListener('click', closeSheet);
+    $('sheetBackdrop').addEventListener('click', closeSheet);
+    $('saveBtn').addEventListener('click', save);
+
+    $('prevMonth').addEventListener('click', function () { shiftMonth(-1); });
+    $('nextMonth').addEventListener('click', function () { shiftMonth(1); });
+
+    document.querySelectorAll('#periodToggle button').forEach(function (b) {
+      b.addEventListener('click', function () {
+        state.reportPeriod = b.dataset.period;
+        document.querySelectorAll('#periodToggle button').forEach(function (x) { x.classList.toggle('active', x === b); });
+        $('monthPicker').classList.toggle('hidden', b.dataset.period !== 'month');
+        $('yearPicker').classList.toggle('hidden', b.dataset.period !== 'year');
+        loadReport();
+      });
+    });
+    $('monthPicker').addEventListener('change', loadReport);
+    $('yearPicker').addEventListener('change', loadReport);
+    $('addCatBtn').addEventListener('click', function () {
+      var v = $('newCatInput').value;
+      if (!v.trim()) return;
+      api.addCategory({ name: v }).then(function (r) { $('newCatInput').value = ''; afterCatChange(r); });
+    });
+    $('newCatInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('addCatBtn').click(); });
+
+    // roll the day over when the app regains focus
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && state.activeView === 'today') {
+        if (state.todayISO !== todayISOLocal()) renderToday();
+      }
+    });
+
+    api.bootstrap().then(function (b) {
+      state.categories = b.categories;
+      state.paymentMethods = b.paymentMethods || state.paymentMethods;
+      state.selectedPayment = b.defaultPaymentMethod || 'UPI';
+      state.locale = b.locale || 'en-IN';
+      state.todayISO = b.currentDateISO || todayISOLocal();
+      state.monthValue = b.currentMonthValue;
+      state.yearValue = b.currentYearValue;
+      state.historyMonth = b.currentMonthValue;
+      state.selectedCategory = state.categories[0] ? state.categories[0].name : null;
+
+      $('monthPicker').value = state.monthValue;
+      buildYearPicker();
+      renderChips(); renderPayments(); renderCatManage();
+      nav('today');
+      $('loading').classList.add('hidden');
+    }).catch(function (e) {
+      $('loading').textContent = 'Failed to load: ' + e.message;
+    });
+  }
+
+  window.addEventListener('DOMContentLoaded', init);
+})();
+</script>

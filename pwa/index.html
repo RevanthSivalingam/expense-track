@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>Expenses</title>
+
+  <!-- PWA: makes Android show "Install app" -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#6366f1">
+
+  <!-- iOS standalone polish -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Expenses">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+
+  <style>
+    html, body { margin: 0; height: 100%; background: #0f172a; overflow: hidden; }
+    /* the real app, served by Apps Script, fills the screen */
+    #app { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }
+    #fallback {
+      position: fixed; inset: 0; display: none; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px; padding: 28px; text-align: center;
+      color: #cbd5e1; font: 16px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    }
+    #fallback a { color: #818cf8; }
+  </style>
+</head>
+<body>
+  <!-- ▼▼▼ PASTE YOUR APPS SCRIPT WEB-APP URL (ends in /exec) BETWEEN THE QUOTES ▼▼▼ -->
+  <iframe id="app" src="https://script.google.com/macros/s/AKfycbzvgPAjwTByib0ivCm7-C5jS1MSzhRQ3Shqw11Q-8i9mRyp-UtHHHvMmditjS7ZPnDB/exec" allow="clipboard-write"></iframe>
+  <!-- ▲▲▲ -------------------------------------------------------------------- ▲▲▲ -->
+
+  <div id="fallback">
+    <div>Couldn’t load your Expenses app.</div>
+    <div>Make sure you’re signed into Google in Chrome, then reopen.</div>
+  </div>
+
+  <script>
+    // Register the service worker — required for Android's "Install app".
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(function () {});
+    }
+    // If the iframe URL was never set, show guidance instead of a blank screen.
+    var src = document.getElementById('app').getAttribute('src');
+    if (!src || src.indexOf('PASTE_YOUR_EXEC_URL') === 0) {
+      document.getElementById('app').style.display = 'none';
+      document.getElementById('fallback').style.display = 'flex';
+      document.getElementById('fallback').insertAdjacentHTML('beforeend',
+        '<div style="font-size:13px;opacity:.7">Edit index.html and set the iframe src to your /exec URL.</div>');
+    }
+  </script>
+</body>
+</html>
