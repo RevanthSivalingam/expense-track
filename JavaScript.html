@@ -259,18 +259,54 @@
     var value = period === 'month' ? $('monthPicker').value : $('yearPicker').value;
     api.getReport({ period: period, value: value }).then(renderReport).catch(function (e) { toast('Report error: ' + e.message); });
   }
+  function shortDate(iso) { var d = isoToLocalDate(iso); return d.getDate() + ' ' + MONTHS[d.getMonth()].substring(0, 3); }
+
   function renderReport(r) {
     $('reportTotal').textContent = fmt(r.total);
     $('reportCount').textContent = r.count + ' expense' + (r.count === 1 ? '' : 's');
     drawPie(r.byCategory);
     drawBar(r.trend);
+
     var tc = $('topCats'); tc.innerHTML = '';
     if (!r.byCategory.length) { tc.appendChild(el('div', 'muted', 'No data for this period')); return; }
-    r.byCategory.slice(0, 5).forEach(function (c) {
-      var row = el('div', 'topcat-row');
-      row.appendChild(el('span', 'tc-name', c.category));
-      row.appendChild(el('span', 'tc-amt', fmt(c.amount)));
-      tc.appendChild(row);
+
+    r.byCategory.forEach(function (c, i) {
+      var color = PALETTE[i % PALETTE.length];
+      var share = r.total > 0 ? Math.round(c.amount / r.total * 100) : 0;
+
+      var acc = el('div', 'cat-acc');
+
+      var head = el('button', 'cat-acc-head');
+      var dot = el('span', 'cat-dot'); dot.style.background = color;
+      var nameWrap = el('span', 'cat-name-wrap');
+      nameWrap.appendChild(el('span', 'cat-name', c.category));
+      nameWrap.appendChild(el('span', 'cat-count', c.count + ' · ' + share + '%'));
+      var amt = el('span', 'cat-amt', fmt(c.amount));
+      var chev = el('span', 'cat-chevron', '›');
+      head.appendChild(dot); head.appendChild(nameWrap); head.appendChild(amt); head.appendChild(chev);
+
+      var bar = el('div', 'cat-share-bar');
+      var fill = el('i'); fill.style.width = share + '%'; fill.style.background = color;
+      bar.appendChild(fill);
+
+      var body = el('div', 'cat-acc-body');
+      var ul = el('ul', 'exp-list'); ul.style.margin = '0';
+      c.items.forEach(function (e) {
+        var li = el('li', 'recent-item');
+        var left = el('div', 'ri-left');
+        left.appendChild(el('span', 'ri-cat', e.note ? e.note : shortDate(e.dateISO)));
+        left.appendChild(el('span', 'ri-meta', e.note ? (shortDate(e.dateISO) + ' · ' + e.paymentMethod) : e.paymentMethod));
+        var right = el('div', 'ri-right');
+        right.appendChild(el('span', 'ri-amt', fmt(e.amount)));
+        li.appendChild(left); li.appendChild(right);
+        ul.appendChild(li);
+      });
+      body.appendChild(ul);
+
+      head.addEventListener('click', function () { acc.classList.toggle('open'); });
+
+      acc.appendChild(head); acc.appendChild(bar); acc.appendChild(body);
+      tc.appendChild(acc);
     });
   }
   function drawPie(byCat) {

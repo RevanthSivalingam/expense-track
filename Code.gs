@@ -267,11 +267,15 @@ function getReport_(period, value) {
   var total = 0, byCatMap = {};
   data.forEach(function (e) {
     total += e.amount;
-    byCatMap[e.category] = (byCatMap[e.category] || 0) + e.amount;
+    if (!byCatMap[e.category]) byCatMap[e.category] = { amount: 0, items: [] };
+    byCatMap[e.category].amount += e.amount;
+    byCatMap[e.category].items.push({           // data is newest-first, so items are too
+      id: e.id, dateISO: e.dateISO, amount: e.amount, note: e.note, paymentMethod: e.paymentMethod
+    });
   });
 
   var byCategory = Object.keys(byCatMap)
-    .map(function (k) { return { category: k, amount: byCatMap[k] }; })
+    .map(function (k) { return { category: k, amount: byCatMap[k].amount, count: byCatMap[k].items.length, items: byCatMap[k].items }; })
     .sort(function (a, b) { return b.amount - a.amount; });
 
   var trend;
